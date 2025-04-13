@@ -1,3 +1,6 @@
+# Updates
+Test commit
+
 # Satmind
 A reinforcement learning algorithm controller for a satellite using the Orekit library. The reinforcement learning algorithm 
 is based on the Deep Deterministic Policy Gradient (DDPG) algorithm and prioritzed experience replay. The agent is a 
