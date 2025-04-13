@@ -11,7 +11,7 @@ from Satmind.replay_memory import Per_Memory, Uniform_Memory
 def test_training():
     """Test if training has taken place (update of weights)"""
 
-    ENV = 'Pendulum-v0'
+    ENV = 'Pendulum-v1'
     env = gym.make(ENV)
     features = env.observation_space.shape[0]
     n_actions = env.action_space.shape[0]
@@ -39,7 +39,7 @@ def test_training():
 
 
 def test_rl():
-    ENVS = ('Pendulum-v0', 'MountainCarContinuous-v0', 'BipedalWalker-v2', 'LunarLanderContinuous-v2')
+    ENVS = ('Pendulum-v1', 'MountainCarContinuous-v0', 'BipedalWalker-v3', 'LunarLanderContinuous-v2')
 
     ENV = ENVS[2]
     env = gym.make(ENV)
