@@ -137,7 +137,7 @@ class Critic:
         # Process state input
         x = tf.keras.layers.Dense(
             self.layer_1_nodes,
-            kernel_regularizer=tf.keras.regularizers.l2(l=0.01)
+            kernel_regularizer=tf.keras.regularizers.l2(0.01)
         )(state_input)
         x = tf.keras.layers.BatchNormalization()(x)
         x = tf.keras.layers.Activation('relu')(x)
@@ -149,7 +149,7 @@ class Critic:
         x = tf.keras.layers.Dense(
             self.layer_2_nodes,
             activation='relu',
-            kernel_regularizer=tf.keras.regularizers.l2(l=0.01)
+            kernel_regularizer=tf.keras.regularizers.l2(0.01)
         )(x)
 
         # Output layer (Q-value)

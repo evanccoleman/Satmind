@@ -19,14 +19,14 @@ from org.hipparchus.ode.nonstiff import DormandPrince853Integrator
 from org.hipparchus.geometry.euclidean.threed import Vector3D
 from org.orekit.propagation.numerical import NumericalPropagator
 from org.orekit.propagation.sampling import OrekitFixedStepHandler
-from org.orekit.orbits import OrbitType, PositionAngle
+from org.orekit.orbits import OrbitType, PositionAngleType
 from org.orekit.forces.gravity.potential import GravityFieldFactory
 from org.orekit.forces.gravity import HolmesFeatherstoneAttractionModel
 from org.orekit.utils import IERSConventions, Constants
 from org.orekit.forces.maneuvers import ConstantThrustManeuver
 from org.orekit.frames import LOFType
 from org.orekit.attitudes import LofOffset
-from org.orekit.python import PythonEventHandler, PythonOrekitFixedStepHandler
+from org.orekit.propagation.sampling import OrekitFixedStepHandler
 from orekit.pyhelpers import setup_orekit_curdir
 from org.orekit.forces.gravity import NewtonianAttraction
 from org.orekit.utils import Constants
@@ -175,7 +175,7 @@ class OrekitEnv:
         # Set inertial frame
         set_orbit = KeplerianOrbit(a, e, i, omega, raan, lM,
                                    aDot, eDot, iDot, paDot, rannDot, anomalyDot,
-                                   PositionAngle.TRUE, inertial_frame, date, MU)
+                                   PositionAngleType.TRUE, inertial_frame, date, MU)
 
         if target:
             self._targetOrbit = set_orbit
@@ -199,40 +199,40 @@ class OrekitEnv:
         # print(f'{sc_state.getMass()}')
         self._sc_fuel = sc_state.addAdditionalState (FUEL_MASS, fuel_mass)
 
-    def create_Propagator(self, prop_master_mode=False):
+    def create_Propagator(self):
         """
-        Creates and initializes the propagator
-        :param prop_master_mode: Set propagator to slave of master mode (slave default)
-        :return:
+        Creates and initializes the propagator using modern Orekit API
         """
-        # tol = NumericalPropagator.tolerances(1.0, self._orbit, self._orbit.getType())
+        # Define integration parameters
         minStep = 0.001
         maxStep = 500.0
-
         position_tolerance = 60.0
+
+        # Setup tolerances for the integrator
+        # Modern approach using the NumericalPropagator.tolerances method
         tolerances = NumericalPropagator.tolerances(position_tolerance, self._orbit, self._orbit.getType())
         abs_tolerance = JArray_double.cast_(tolerances[0])
-        rel_telerance = JArray_double.cast_(tolerances[1])
+        rel_tolerance = JArray_double.cast_(tolerances[1])
 
-        # integrator = DormandPrince853Integrator(minStep, maxStep, 1e-5, 1e-10)
-        integrator = DormandPrince853Integrator(minStep, maxStep, abs_tolerance, rel_telerance)
-
+        # Create the integrator with appropriate tolerances
+        integrator = DormandPrince853Integrator(minStep, maxStep, abs_tolerance, rel_tolerance)
         integrator.setInitialStepSize(10.0)
 
+        # Create the numerical propagator
         numProp = NumericalPropagator(integrator)
         numProp.setInitialState(self._sc_fuel)
         numProp.setMu(MU)
         numProp.setOrbitType(OrbitType.KEPLERIAN)
 
-        if prop_master_mode:
-            output_step = 5.0
-            handler = OutputHandler()
-            numProp.setMasterMode(output_step, handler)
-        else:
-            numProp.setSlaveMode()
+        # Modern Orekit uses different propagation mode management
+        # Instead of setSlaveMode(), we configure the propagator for basic propagation
 
+        # Set the attitude provider for the propagator
+        numProp.setAttitudeProvider(attitude)
+
+        # Store the propagator
         self._prop = numProp
-        self._prop.setAttitudeProvider(attitude)
+
 
     def render_plots(self, episode=1, save=True, show=True):
         """
@@ -393,36 +393,59 @@ class OrekitEnv:
 
     def step(self, thrust):
         """
-        Take a propagation step
-        :param thrust_mag: Thrust magnitude (Newtons, float)
-        :return: spacecraft state (np.array), reward value (float), don\
-        e (bbol)
+        Take a propagation step using modern Orekit API
+
+        :param thrust: Thrust vector [x, y, z] in spacecraft reference frame
+        :return: spacecraft state (np.array), reward value (float), done (bool)
         """
+        # Calculate thrust magnitude and direction
         thrust_mag = np.linalg.norm(thrust)
-        thrust_dir = thrust / thrust_mag
+
+        # Handle zero or near-zero thrust case
+        if thrust_mag < 1e-10:
+            thrust_dir = np.array([0.0, 0.0, 0.0])
+            thrust_mag = 0.0
+        else:
+            thrust_dir = thrust / thrust_mag
+
+        # Create direction vector for thrust
         DIRECTION = Vector3D(float(thrust_dir[0]), float(thrust_dir[1]), float(thrust_dir[2]))
 
-        if thrust_mag <= 0:
-            # DIRECTION = Vector3D.MINUS_J
-            thrust_mag = abs(float(thrust_mag))
-        else:
-            # DIRECTION = Vector3D.PLUS_J
-            thrust_mag = float(thrust_mag)
+        # Create thrust force model
+        thrust_force = ConstantThrustManeuver(
+            self._extrap_Date,  # Start date
+            self.stepT,  # Duration
+            float(thrust_mag),  # Magnitude
+            self._isp,  # Specific impulse
+            attitude,  # Attitude provider
+            DIRECTION  # Thrust direction
+        )
 
-        thrust_force = ConstantThrustManeuver(self._extrap_Date, self.stepT, thrust_mag, self._isp, attitude, DIRECTION)
-        # thrust_force.init(SpacecraftState(self._currentOrbit, float(self.mass + self.fuel_mass)), self._extrap_Date)
+        # Add the thrust force to the propagator
         self._prop.addForceModel(thrust_force)
-        currentState = self._prop.propagate(self._extrap_Date.shiftedBy(self.stepT))
-        # print(f'{currentState.getMass()}')
+
+        # Propagate to the next step using modern API
+        # In modern Orekit, we propagate to a target date
+        target_date = self._extrap_Date.shiftedBy(self.stepT)
+        currentState = self._prop.propagate(target_date)
+
+        # Remove the thrust force model after propagation to avoid accumulation
+        self._prop.removeForceModels()
+        self.setForceModel()  # Re-add base force models
+
+        # Update spacecraft state
         self.cuf_fuel_mass = currentState.getMass() - self.dry_mass
         self._currentDate = currentState.getDate()
         self._extrap_Date = self._currentDate
         self._currentOrbit = currentState.getOrbit()
-        coord = currentState.getPVCoordinates().getPosition()
 
+        # Store trajectory data
+        coord = currentState.getPVCoordinates().getPosition()
         self.px.append(coord.getX())
         self.py.append(coord.getY())
         self.pz.append(coord.getZ())
+
+        # Store orbital elements
         self.a_orbit.append(currentState.getA())
         self.ex_orbit.append(currentState.getEquinoctialEx())
         self.ey_orbit.append(currentState.getEquinoctialEy())
@@ -430,17 +453,24 @@ class OrekitEnv:
         self.hy_orbit.append(currentState.getHy())
         self.lv_orbit.append(currentState.getLv())
 
+        # Calculate reward and check if episode is done
         reward, done = self.dist_reward(thrust)
 
-        state_1 = [(self._currentOrbit.getA()) / self.r_target_state[0],
-                   self._currentOrbit.getEquinoctialEx(), self._currentOrbit.getEquinoctialEy(),
-                   self._currentOrbit.getHx(), self._currentOrbit.getHy(),
-                   self._currentOrbit.getADot(), self._currentOrbit.getEquinoctialExDot(),
-                   self._currentOrbit.getEquinoctialEyDot(),
-                   self._currentOrbit.getHxDot(), self._currentOrbit.getHyDot()
-                   ]
+        # Prepare state for the next step
+        state_1 = [
+            (self._currentOrbit.getA()) / self.r_target_state[0],
+            self._currentOrbit.getEquinoctialEx(),
+            self._currentOrbit.getEquinoctialEy(),
+            self._currentOrbit.getHx(),
+            self._currentOrbit.getHy(),
+            self._currentOrbit.getADot(),
+            self._currentOrbit.getEquinoctialExDot(),
+            self._currentOrbit.getEquinoctialEyDot(),
+            self._currentOrbit.getHxDot(),
+            self._currentOrbit.getHyDot()
+        ]
 
-
+        # Store derivative information
         self.adot_orbit.append(self._currentOrbit.getADot())
         self.exdot_orbit.append(self._currentOrbit.getEquinoctialExDot())
         self.eydot_orbit.append(self._currentOrbit.getEquinoctialEyDot())
@@ -510,33 +540,41 @@ class OrekitEnv:
         return reward, done
 
     def render_target(self):
+        """Render the target orbit trajectory using modern Orekit API"""
 
         target_sc = SpacecraftState(self._targetOrbit)
 
         # Orbit time for one orbit regardless of semi-major axis
-        orbit_time = sqrt(4 * pi**2 * self._targetOrbit.getA()**3 / MU) * 2.0
+        orbit_time = sqrt(4 * pi ** 2 * self._targetOrbit.getA() ** 3 / MU) * 2.0
         minStep = 1.e-3
         maxStep = 1.e+3
 
+        # Create integrator
         integrator = DormandPrince853Integrator(minStep, maxStep, 1e-5, 1e-10)
         integrator.setInitialStepSize(100.0)
 
+        # Create propagator with modern API (without using setSlaveMode)
         numProp = NumericalPropagator(integrator)
         numProp.setInitialState(target_sc)
         numProp.setMu(MU)
-        numProp.setSlaveMode()
 
-        target_prop = numProp
+        # Add force models - just Newtonian gravity for the target orbit
         earth = NewtonianAttraction(MU)
-        target_prop.addForceModel(earth)
+        numProp.addForceModel(earth)
 
+        # Propagate the orbit over time and collect position data
         target_date = self.final_date.shiftedBy(orbit_time)
         extrapDate = self.final_date
         stepT = 100.0
 
-        # know this is the state for final_date + time for orbit
+        # Clear previous target trajectory data
+        self.target_px = []
+        self.target_py = []
+        self.target_pz = []
+
+        # Propagate and collect position data
         while extrapDate.compareTo(target_date) <= 0:
-            currentState = target_prop.propagate(extrapDate)
+            currentState = numProp.propagate(extrapDate)
             coord = currentState.getPVCoordinates().getPosition()
             self.target_px.append(coord.getX())
             self.target_py.append(coord.getY())
@@ -557,33 +595,17 @@ class OrekitEnv:
         plt.show()
 
 
-class OutputHandler(PythonOrekitFixedStepHandler):
-    """
-    Implements a custom handler for every value
-    """
+class OutputHandler(OrekitFixedStepHandler):
     def init(self, s0, t):
-        """
-        Initilization at every prpagation step
-        :param s0: initial state (spacecraft State)
-        :param t: initial time (int)
-        :return:
-        """
         print('Orbital Elements:')
 
     def handleStep(self, currentState, isLast):
-        """
-        Perform a step at every propagation step
-        :param currentState: current spacecraft state (Spacecraft state)
-        :param isLast: last step in the propagation (bool)
-        :return:
-        """
         o = OrbitType.KEPLERIAN.convertType(currentState.getOrbit())
         print(o.getDate())
-        print('a:{:5.3f}, e:{:5.3f}, i:{:5.3f}, theta:{:5.3f}'.format(o.getA(), o.getE(),
-                                                                      degrees(o.getI()), degrees(o.getLv())))
+        print('a:{:5.3f}, e:{:5.3f}, i:{:5.3f}, theta:{:5.3f}'.format(
+            o.getA(), o.getE(), degrees(o.getI()), degrees(o.getLv())))
         if isLast:
             print('this was the last step ')
-
 
 def main():
 

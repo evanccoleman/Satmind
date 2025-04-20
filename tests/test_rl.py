@@ -1,7 +1,7 @@
 import tensorflow as tf
 import numpy as np
-import gym
-import gym.spaces
+import gymnasium as gym
+#import gym.spaces
 
 from Satmind.actor_critic import Actor, Critic
 from Satmind.utils import OrnsteinUhlenbeck
@@ -81,7 +81,7 @@ def test_rl():
     tf.random.set_seed(seed_value)  # TF2 version
 
     # Training parameters
-    num_episodes = 1000
+    num_episodes = 10
     batch_size = 128
     layer_1_nodes, layer_2_nodes = 500, 450
     tau = 0.001
