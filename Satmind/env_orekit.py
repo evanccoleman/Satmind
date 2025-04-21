@@ -30,10 +30,13 @@ from org.orekit.propagation.sampling import OrekitFixedStepHandler
 from orekit.pyhelpers import setup_orekit_curdir
 from org.orekit.forces.gravity import NewtonianAttraction
 from org.orekit.utils import Constants
+from org.orekit.errors import OrekitException
 
 from org.hipparchus.geometry.euclidean.threed import Vector3D
 from java.util import Arrays
 from orekit import JArray_double
+
+
 
 setup_orekit_curdir()
 
@@ -264,10 +267,16 @@ class OrekitEnv:
         #     plt.savefig(save_path + '2d.pdf')
         # if show: plt.show()
         fig = plt.figure(2)
-        ax = fig.gca(projection='3d')
-        ax.plot(np.asarray(self.px)/1000, np.asarray(self.py)/1000, np.asarray(self.pz)/1000,label='Satellite Trajectory')
-        ax.plot(np.asarray(self.target_px)/1000, np.asarray(self.target_py)/1000, np.asarray(self.target_pz)/1000,
-                color='red',label='Target trajectory')
+        #ax = fig.gca(projection='3d')
+        #ax.plot(np.asarray(self.px)/1000, np.asarray(self.py)/1000, np.asarray(self.pz)/1000,label='Satellite Trajectory')
+        #ax.plot(np.asarray(self.target_px)/1000, np.asarray(self.target_py)/1000, np.asarray(self.target_pz)/1000,
+        #        color='red',label='Target trajectory')
+        ax = fig.add_subplot(projection='3d')  # Corrected line
+        ax.plot(np.asarray(self.px) / 1000, np.asarray(self.py) / 1000, np.asarray(self.pz) / 1000,
+                label='Satellite Trajectory')
+        ax.plot(np.asarray(self.target_px) / 1000, np.asarray(self.target_py) / 1000, np.asarray(self.target_pz) / 1000,
+                color='red', label='Target trajectory')
+
         ax.legend()
         ax.set_xlabel('X (km)')
         ax.set_ylabel('Y (km)')
@@ -405,79 +414,123 @@ class OrekitEnv:
         if thrust_mag < 1e-10:
             thrust_dir = np.array([0.0, 0.0, 0.0])
             thrust_mag = 0.0
+            DIRECTION = Vector3D(0.0, 0.0, 0.0)  # Define DIRECTION even for zero thrust
         else:
             thrust_dir = thrust / thrust_mag
+            # Create direction vector for thrust
+            DIRECTION = Vector3D(float(thrust_dir[0]), float(thrust_dir[1]), float(thrust_dir[2]))
 
-        # Create direction vector for thrust
-        DIRECTION = Vector3D(float(thrust_dir[0]), float(thrust_dir[1]), float(thrust_dir[2]))
-
-        # Create thrust force model
-        thrust_force = ConstantThrustManeuver(
-            self._extrap_Date,  # Start date
-            self.stepT,  # Duration
-            float(thrust_mag),  # Magnitude
-            self._isp,  # Specific impulse
-            attitude,  # Attitude provider
-            DIRECTION  # Thrust direction
-        )
-
-        # Add the thrust force to the propagator
-        self._prop.addForceModel(thrust_force)
-
-        # Propagate to the next step using modern API
-        # In modern Orekit, we propagate to a target date
-        target_date = self._extrap_Date.shiftedBy(self.stepT)
-        currentState = self._prop.propagate(target_date)
-
-        # Remove the thrust force model after propagation to avoid accumulation
-        self._prop.removeForceModels()
-        self.setForceModel()  # Re-add base force models
-
-        # Update spacecraft state
-        self.cuf_fuel_mass = currentState.getMass() - self.dry_mass
-        self._currentDate = currentState.getDate()
-        self._extrap_Date = self._currentDate
-        self._currentOrbit = currentState.getOrbit()
-
-        # Store trajectory data
-        coord = currentState.getPVCoordinates().getPosition()
-        self.px.append(coord.getX())
-        self.py.append(coord.getY())
-        self.pz.append(coord.getZ())
-
-        # Store orbital elements
-        self.a_orbit.append(currentState.getA())
-        self.ex_orbit.append(currentState.getEquinoctialEx())
-        self.ey_orbit.append(currentState.getEquinoctialEy())
-        self.hx_orbit.append(currentState.getHx())
-        self.hy_orbit.append(currentState.getHy())
-        self.lv_orbit.append(currentState.getLv())
-
-        # Calculate reward and check if episode is done
-        reward, done = self.dist_reward(thrust)
-
-        # Prepare state for the next step
-        state_1 = [
+        # Default state, reward, done in case of early exit due to error
+        state_1 = np.array([  # Use last known state representation
             (self._currentOrbit.getA()) / self.r_target_state[0],
             self._currentOrbit.getEquinoctialEx(),
             self._currentOrbit.getEquinoctialEy(),
             self._currentOrbit.getHx(),
             self._currentOrbit.getHy(),
-            self._currentOrbit.getADot(),
-            self._currentOrbit.getEquinoctialExDot(),
-            self._currentOrbit.getEquinoctialEyDot(),
-            self._currentOrbit.getHxDot(),
-            self._currentOrbit.getHyDot()
-        ]
+            # Use 0 or last known values for derivatives if available, otherwise 0
+            getattr(self._currentOrbit, 'getADot', lambda: 0)(),
+            getattr(self._currentOrbit, 'getEquinoctialExDot', lambda: 0)(),
+            getattr(self._currentOrbit, 'getEquinoctialEyDot', lambda: 0)(),
+            getattr(self._currentOrbit, 'getHxDot', lambda: 0)(),
+            getattr(self._currentOrbit, 'getHyDot', lambda: 0)()
+        ])
+        reward = 0.0  # Or a default penalty
+        done = False
 
-        # Store derivative information
-        self.adot_orbit.append(self._currentOrbit.getADot())
-        self.exdot_orbit.append(self._currentOrbit.getEquinoctialExDot())
-        self.eydot_orbit.append(self._currentOrbit.getEquinoctialEyDot())
-        self.hxdot_orbit.append(self._currentOrbit.getHxDot())
-        self.hydot_orbit.append(self._currentOrbit.getHyDot())
+        try:
+            # Create thrust force model only if thrust is applied
+            thrust_force = None
+            if thrust_mag > 1e-10:
+                thrust_force = ConstantThrustManeuver(
+                    self._extrap_Date,  # Start date
+                    self.stepT,  # Duration
+                    float(thrust_mag),  # Magnitude
+                    self._isp,  # Specific impulse
+                    attitude,  # Attitude provider (ensure 'attitude' is defined)
+                    DIRECTION  # Thrust direction
+                )
+                # Add the thrust force to the propagator
+                self._prop.addForceModel(thrust_force)
 
-        return state_1, reward, done
+            # Propagate to the next step using modern API
+            target_date = self._extrap_Date.shiftedBy(self.stepT)
+            currentState = self._prop.propagate(target_date)
+
+            # Remove the thrust force model after propagation if it was added
+            if thrust_force:
+                self._prop.removeForceModels()  # Assumes only the thrust was added temporarily
+                self.setForceModel()  # Re-add base force models if needed, ensure this function exists and does the right thing
+
+            # Update spacecraft state
+            self.cuf_fuel_mass = currentState.getMass() - self.dry_mass
+            self._currentDate = currentState.getDate()
+            self._extrap_Date = self._currentDate
+            self._currentOrbit = currentState.getOrbit()
+
+            # Store trajectory data
+            coord = currentState.getPVCoordinates().getPosition()
+            self.px.append(coord.getX())
+            self.py.append(coord.getY())
+            self.pz.append(coord.getZ())
+
+            # Store orbital elements
+            self.a_orbit.append(currentState.getA())
+            self.ex_orbit.append(currentState.getEquinoctialEx())
+            self.ey_orbit.append(currentState.getEquinoctialEy())
+            self.hx_orbit.append(currentState.getHx())
+            self.hy_orbit.append(currentState.getHy())
+            self.lv_orbit.append(currentState.getLv())
+
+            # Calculate reward and check if episode is done
+            reward, done = self.dist_reward(thrust)  # Ensure dist_reward uses self._currentOrbit
+
+            # Prepare state for the next step
+            state_1 = [
+                (self._currentOrbit.getA()) / self.r_target_state[0],
+                self._currentOrbit.getEquinoctialEx(),
+                self._currentOrbit.getEquinoctialEy(),
+                self._currentOrbit.getHx(),
+                self._currentOrbit.getHy(),
+                self._currentOrbit.getADot(),
+                self._currentOrbit.getEquinoctialExDot(),
+                self._currentOrbit.getEquinoctialEyDot(),
+                self._currentOrbit.getHxDot(),
+                self._currentOrbit.getHyDot()
+            ]
+
+            # Store derivative information
+            self.adot_orbit.append(self._currentOrbit.getADot())
+            self.exdot_orbit.append(self._currentOrbit.getEquinoctialExDot())
+            self.eydot_orbit.append(self._currentOrbit.getEquinoctialEyDot())
+            self.hxdot_orbit.append(self._currentOrbit.getHxDot())
+            self.hydot_orbit.append(self._currentOrbit.getHyDot())
+
+        except OrekitException as e:
+            # Check if the error message matches the specific eccentricity issue
+            if "invalid parameter eccentricity" in str(e.getMessage()):  # Use getMessage() for Java Exceptions via JCC
+                print(
+                    f"Warning: Orekit propagation failed due to near-zero eccentricity ({e.getMessage()}). Ending episode.")
+                # Handle this specific error:
+                # - Return the state before the failed step
+                # - Assign a large negative reward to discourage reaching this state
+                # - Set done = True
+                reward = -200.0  # Penalize heavily
+                done = True
+                # state_1 is already set to the pre-step state by default
+            else:
+                # Re-raise other OrekitExceptions or JavaErrors
+                print(f"Unhandled OrekitException: {e.getMessage()}")
+                raise e
+        except Exception as e:
+            # Catch any other Python exceptions during the step
+            print(f"An error occurred during environment step: {e}")
+            # Decide how to handle: re-raise, or terminate episode
+            reward = -200.0  # Penalize
+            done = True
+            # state_1 is already set to the pre-step state by default
+
+        # Ensure state_1 is always returned as a numpy array if required by the agent
+        return np.array(state_1), reward, done
 
     def dist_reward(self, thrust):
         """

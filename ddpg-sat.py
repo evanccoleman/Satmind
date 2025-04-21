@@ -55,7 +55,7 @@ def main(args):
     tf.random.set_seed(seed_value)  # TF2 version
 
     # Training parameters
-    num_episodes = 2000
+    num_episodes = 2
     batch_size = 128
     layer_1_nodes, layer_2_nodes = 512, 450
     tau = 0.01
@@ -368,8 +368,8 @@ def plot_thrust(actions, episode, n, save_fig, show):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', help="path of a trained tensorlfow model (str: path)", type=str)
-    parser.add_argument('--test', help="pass if testing a model", action='store_true')
-    parser.add_argument('--savefig', help="Save figures to file", action='store_true')
-    parser.add_argument('--showfig', help='Display plotted figures', action='store_true')
+    parser.add_argument('--test', help="pass if testing a model", type=bool, default=False)
+    parser.add_argument('--savefig', help="Save figures to file", type=bool, default=True)
+    parser.add_argument('--showfig', help='Display plotted figures', type=bool, default=False)
     args = vars(parser.parse_args())
     main(args)
